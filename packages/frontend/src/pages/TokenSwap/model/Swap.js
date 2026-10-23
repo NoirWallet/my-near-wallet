@@ -10,6 +10,7 @@ import { useDispatch } from 'react-redux';
 import useIsMounted from '../../../hooks/useIsMounted';
 import { showCustomAlert } from '../../../redux/actions/status';
 import { DEFAULT_SLIPPAGE_PERCENT } from '../utils/constants';
+import { quoteMatchesState } from '../utils/quote';
 
 export const VIEW_STATE = {
     inputForm: 'inputForm',
@@ -18,63 +19,53 @@ export const VIEW_STATE = {
 };
 
 const initialState = {
+    accountId: '',
     viewState: VIEW_STATE.inputForm,
     tokenIn: null,
     amountIn: '',
     tokenOut: null,
-    amountOut: '',
-    swapFee: 0,
-    estimatedFee: 0,
+    selectedQuote: null,
     slippage: DEFAULT_SLIPPAGE_PERCENT,
-    priceImpactPercent: '',
-    swapPoolId: null,
-    isNearTransformation: false,
     lastSwapState: null,
     swapPending: false,
 };
 
-const ACTION = {
+export const ACTION = {
     SET_VIEW_STATE: 'setViewState',
     SET_TOKEN_IN: 'setTokenIn',
     SET_TOKEN_OUT: 'setTokenOut',
     SET_AMOUNT_IN: 'setAmountIn',
-    SET_AMOUNT_OUT: 'setAmountOut',
-    SET_SWAP_POOL_ID: 'setSwapPoolId',
-    SET_SWAP_FEE: 'setSwapFee',
-    SET_ESTIMATED_FEE: 'setEstimatedFee',
+    SET_SELECTED_QUOTE: 'setSelectedQuote',
     SET_SLIPPAGE: 'setSlippage',
-    SET_PRICE_IMPACT_PERCENT: 'setPriceImpactPercent',
-    SET_IS_NEAR_TRANSFORMATION: 'setIsNearTransformation',
     SET_SWAP_PENDING: 'setSwapPending',
     SET_COMPLETED_SWAP_STATE: 'setCompletedSwapState',
 };
 
-function swapReducer(state, action) {
+export function swapReducer(state, action) {
     const payload = action.payload;
 
     switch (action.type) {
         case ACTION.SET_VIEW_STATE:
             return { ...state, viewState: payload };
         case ACTION.SET_TOKEN_IN:
-            return { ...state, tokenIn: payload };
+            if (state.tokenIn === payload) {
+                return state;
+            }
+            return { ...state, tokenIn: payload, selectedQuote: null };
         case ACTION.SET_TOKEN_OUT:
-            return { ...state, tokenOut: payload };
+            if (state.tokenOut === payload) {
+                return state;
+            }
+            return { ...state, tokenOut: payload, selectedQuote: null };
         case ACTION.SET_AMOUNT_IN:
-            return { ...state, amountIn: payload };
-        case ACTION.SET_AMOUNT_OUT:
-            return { ...state, amountOut: payload };
-        case ACTION.SET_SWAP_POOL_ID:
-            return { ...state, swapPoolId: payload };
-        case ACTION.SET_SWAP_FEE:
-            return { ...state, swapFee: payload };
-        case ACTION.SET_ESTIMATED_FEE:
-            return { ...state, estimatedFee: payload };
+            return { ...state, amountIn: payload, selectedQuote: null };
+        case ACTION.SET_SELECTED_QUOTE:
+            return {
+                ...state,
+                selectedQuote: quoteMatchesState(payload, state) ? payload : null,
+            };
         case ACTION.SET_SLIPPAGE:
-            return { ...state, slippage: payload };
-        case ACTION.SET_PRICE_IMPACT_PERCENT:
-            return { ...state, priceImpactPercent: payload };
-        case ACTION.SET_IS_NEAR_TRANSFORMATION:
-            return { ...state, isNearTransformation: payload };
+            return { ...state, slippage: payload, selectedQuote: null };
         case ACTION.SET_SWAP_PENDING:
             return { ...state, swapPending: payload };
         case ACTION.SET_COMPLETED_SWAP_STATE:
@@ -96,25 +87,42 @@ export const useSwapData = () => {
     return context;
 };
 
-export function SwapProvider({ children }) {
+export function SwapProvider({ children, accountId }) {
     const dispatch = useDispatch();
     const isMounted = useIsMounted();
-    const [swapState, dispatchSwapAction] = useReducer(swapReducer, initialState);
+    const [swapState, dispatchSwapAction] = useReducer(swapReducer, {
+        ...initialState,
+        accountId,
+    });
 
     const dispatchIfMounted = useCallback(
         (type, payload) => {
             if (isMounted()) {
                 dispatchSwapAction({ type, payload });
             } else if (type === ACTION.SET_COMPLETED_SWAP_STATE) {
-                const { success, tokenIn, tokenOut } = payload;
+                const {
+                    accountId: completedAccountId,
+                    success,
+                    unconfirmed,
+                    hash,
+                    tokenIn,
+                    tokenOut,
+                } = payload;
+                const subject = `${tokenIn} to ${tokenOut} on ${completedAccountId}`;
+                const errorMessage = unconfirmed
+                    ? `Swap status unknown for ${subject}. ${
+                          hash
+                              ? `Check transaction ${hash} before swapping again.`
+                              : 'Check account history before swapping again.'
+                      }`
+                    : `${subject}${hash ? `. Transaction ${hash}` : ''}`;
 
                 dispatch(
                     showCustomAlert({
-                        success,
-                        messageCodeHeader: success ? 'swap.success' : 'swap.error',
-                        // @note is there a different way to show custom data
-                        // instead of 'errorMessage' key?
-                        errorMessage: `${tokenIn} to ${tokenOut}`,
+                        success: success && !unconfirmed,
+                        messageCodeHeader:
+                            success && !unconfirmed ? 'swap.success' : 'swap.error',
+                        errorMessage,
                     })
                 );
             }
@@ -136,26 +144,11 @@ export function SwapProvider({ children }) {
             setAmountIn(payload) {
                 dispatchSwapAction({ type: ACTION.SET_AMOUNT_IN, payload });
             },
-            setAmountOut(payload) {
-                dispatchIfMounted(ACTION.SET_AMOUNT_OUT, payload);
-            },
-            setSwapPoolId(payload) {
-                dispatchIfMounted(ACTION.SET_SWAP_POOL_ID, payload);
-            },
-            setSwapFee(payload) {
-                dispatchIfMounted(ACTION.SET_SWAP_FEE, payload);
-            },
-            setEstimatedFee(payload) {
-                dispatchIfMounted(ACTION.SET_ESTIMATED_FEE, payload);
+            setSelectedQuote(payload) {
+                dispatchIfMounted(ACTION.SET_SELECTED_QUOTE, payload);
             },
             setSlippage(payload) {
                 dispatchIfMounted(ACTION.SET_SLIPPAGE, payload);
-            },
-            setPriceImpactPercent(payload) {
-                dispatchIfMounted(ACTION.SET_PRICE_IMPACT_PERCENT, payload);
-            },
-            setIsNearTransformation(payload) {
-                dispatchIfMounted(ACTION.SET_IS_NEAR_TRANSFORMATION, payload);
             },
             setSwapPending(payload) {
                 dispatchIfMounted(ACTION.SET_SWAP_PENDING, payload);

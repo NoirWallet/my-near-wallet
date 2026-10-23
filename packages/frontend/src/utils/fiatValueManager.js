@@ -131,3 +131,5 @@ export default class FiatValueManager {
         }
     }
 }
+
+export const fiatValueManager = new FiatValueManager();

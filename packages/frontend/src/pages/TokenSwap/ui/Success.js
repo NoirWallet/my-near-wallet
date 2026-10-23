@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Translate } from 'react-localize-redux';
+import { useDispatch } from 'react-redux';
 import styled from 'styled-components';
 
 import FormButton from '../../../components/common/FormButton';
@@ -7,8 +8,11 @@ import SafeTranslate from '../../../components/SafeTranslate';
 import AvatarSuccessIcon from '../../../components/svg/AvatarSuccessIcon';
 import FailIcon from '../../../components/svg/FailIcon';
 import { toSignificantDecimals } from '../../../utils/amounts';
+import { actions as swapActions } from '../../../redux/slices/swap';
 import { useSwapData } from '../model/Swap';
 import { DECIMALS_TO_SAFE } from '../utils/constants';
+import fungibleTokenExchange from '../../../services/tokenExchange';
+import RecoverableBalances from './RecoverableBalances';
 
 const StyledContainer = styled.div`
     > svg {
@@ -44,25 +48,102 @@ const ButtonsWrapper = styled.div`
 
 const noop = () => {};
 
-export default function Success({ onClickContinue = noop, onClickGoToExplorer }) {
+export default function Success({
+    onClickContinue = noop,
+    onClickGoToExplorer,
+    account,
+}) {
+    const dispatch = useDispatch();
     const {
-        swapState: { tokenIn, amountIn, tokenOut, amountOut, lastSwapState = {} },
+        swapState: { tokenIn, amountIn, tokenOut, selectedQuote, lastSwapState = {} },
+        events: { setCompletedSwapState },
     } = useSwapData();
 
-    const { success, hash: swapHash, failReason } = lastSwapState;
+    const { success, unconfirmed, hash: swapHash, failReason } = lastSwapState || {};
+    const [checking, setChecking] = useState(false);
+    const [checkError, setCheckError] = useState('');
+    const mounted = useRef(true);
+    useEffect(
+        () => () => {
+            mounted.current = false;
+        },
+        []
+    );
+    const checkResult = async () => {
+        if (
+            !account ||
+            !swapHash ||
+            checking ||
+            account.accountId !== lastSwapState.quote?.context.accountId
+        ) {
+            return;
+        }
+        setChecking(true);
+        setCheckError('');
+        try {
+            const result = await fungibleTokenExchange.checkSwapResult({
+                account,
+                quote: lastSwapState.quote,
+                hash: swapHash,
+            });
+            if (!mounted.current) {
+                return;
+            }
+            setCompletedSwapState({
+                ...lastSwapState,
+                success: result.success,
+                unconfirmed: result.unconfirmed,
+                failReason: result.failReason,
+                hash: result.swapTxHash || swapHash,
+                amountOut: result.amountOut || lastSwapState.amountOut,
+                quote: result.quote || lastSwapState.quote,
+            });
+            if (!result.unconfirmed) {
+                const tokenIds = [
+                    tokenIn?.contractName,
+                    tokenOut?.contractName,
+                    ...(result.routeTokenIds || lastSwapState.quote?.routeTokenIds || []),
+                ]
+                    .filter(Boolean)
+                    .map((id) => fungibleTokenExchange.replaceNearIdIfNecessary(id));
+                dispatch(
+                    swapActions.updateTokensBalance({
+                        accountId: account.accountId,
+                        tokenIds: [...new Set(tokenIds)],
+                    })
+                );
+            }
+        } catch (error) {
+            if (mounted.current) {
+                setCheckError(error.message);
+            }
+        } finally {
+            if (mounted.current) {
+                setChecking(false);
+            }
+        }
+    };
 
     const successData = {
         amountFrom: `${toSignificantDecimals(amountIn, DECIMALS_TO_SAFE)} ${
             tokenIn?.onChainFTMetadata?.symbol
         }`,
-        amountTo: `${toSignificantDecimals(amountOut, DECIMALS_TO_SAFE)} ${
-            tokenOut?.onChainFTMetadata?.symbol
-        }`,
+        amountTo: `${toSignificantDecimals(
+            lastSwapState?.amountOut || selectedQuote?.amountOut,
+            DECIMALS_TO_SAFE
+        )} ${tokenOut?.onChainFTMetadata?.symbol}`,
     };
 
     return (
         <StyledContainer className='buttons-bottom'>
-            {success ? (
+            {unconfirmed ? (
+                <StyledHeader>
+                    {swapHash
+                        ? 'Swap status unknown. Check the transaction before swapping again.'
+                        : 'Swap status unknown. Check your account history before swapping again.'}
+                    {checkError && <Reason>{checkError}</Reason>}
+                </StyledHeader>
+            ) : success ? (
                 <>
                     <AvatarSuccessIcon />
                     <StyledHeader data-test-id='swapPageSuccessMessage'>
@@ -83,9 +164,15 @@ export default function Success({ onClickContinue = noop, onClickGoToExplorer })
                 </>
             )}
             <ButtonsWrapper>
+                {unconfirmed && swapHash && (
+                    <FormButton onClick={checkResult} disabled={checking}>
+                        {checking ? 'Checking...' : 'Check transaction status'}
+                    </FormButton>
+                )}
                 <FormButton
                     data-test-id='swapPageContinueAfterSwapButton'
                     onClick={onClickContinue}
+                    disabled={unconfirmed && !!swapHash}
                 >
                     <Translate id='button.continue' />
                 </FormButton>
@@ -96,6 +183,7 @@ export default function Success({ onClickContinue = noop, onClickGoToExplorer })
                     </FormButton>
                 )}
             </ButtonsWrapper>
+            <RecoverableBalances account={account} />
         </StyledContainer>
     );
 }

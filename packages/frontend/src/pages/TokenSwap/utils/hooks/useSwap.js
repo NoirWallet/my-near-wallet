@@ -1,5 +1,5 @@
 import Big from 'big.js';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import CONFIG from '../../../../config';
@@ -9,6 +9,7 @@ import selectNEARAsTokenWithMetadata from '../../../../redux/selectors/crossStat
 import { actions } from '../../../../redux/slices/swap';
 import fungibleTokenExchange from '../../../../services/tokenExchange';
 import { useSwapData, VIEW_STATE } from '../../model/Swap';
+import { quoteMatchesState } from '../quote';
 
 const { updateTokensBalance } = actions;
 
@@ -26,23 +27,18 @@ const getAmountStats = ({ tokenIn, amountIn, tokenOut, amountOut, nearUsdPrice }
         tokenOut.contractName
     );
 
-    if (
-        fungibleTokenExchange.isNearTransformation({ tokenIn, tokenOut }) ||
-        tokenInId === CONFIG.NEAR_TOKEN_ID
-    ) {
+    if (tokenInId === CONFIG.NEAR_TOKEN_ID) {
         return {
             volumeNear: amountIn,
             volumeUSD: getUsdVolume(amountIn, nearUsdPrice),
         };
     }
-
     if (tokenOutId === CONFIG.NEAR_TOKEN_ID) {
         return {
             volumeNear: amountOut,
             volumeUSD: getUsdVolume(amountOut, nearUsdPrice),
         };
     }
-
     return {
         inputAmountUSD: getUsdVolume(amountIn, tokenIn.fiatValueMetadata.usd),
     };
@@ -51,35 +47,55 @@ const getAmountStats = ({ tokenIn, amountIn, tokenOut, amountOut, nearUsdPrice }
 export default function useSwap({
     account,
     amountIn,
-    poolId,
+    quote,
     tokenIn,
     tokenOut,
-    minAmountOut,
-    isNearTransformation,
+    slippage,
 }) {
     const nearConfig = useSelector((state) =>
         selectNEARAsTokenWithMetadata(state, { includeNearContractName: true })
     );
     const dispatch = useDispatch();
     const {
-        events: { setSwapPending, setCompletedSwapState, setViewState },
+        swapState,
+        events: { setSelectedQuote, setSwapPending, setCompletedSwapState, setViewState },
     } = useSwapData();
+    const current = useRef({ account, swapState });
+    const mounted = useRef(true);
+    const inFlight = useRef(false);
+    current.current = { account, swapState };
 
-    const swap = useMemo(() => {
+    useEffect(
+        () => () => {
+            mounted.current = false;
+        },
+        []
+    );
+
+    return useMemo(() => {
         if (
             !account ||
-            !amountIn ||
-            (!isNearTransformation && !poolId) ||
+            !quote ||
             !tokenIn ||
             !tokenOut ||
-            !minAmountOut
+            !amountIn ||
+            !quoteMatchesState(quote, swapState)
         ) {
             return null;
         }
 
-        return async () => {
-            setSwapPending(true);
+        const isCurrent = () =>
+            mounted.current &&
+            current.current.account?.accountId === account.accountId &&
+            current.current.swapState.selectedQuote === quote &&
+            quoteMatchesState(quote, current.current.swapState);
 
+        return async () => {
+            if (inFlight.current || !isCurrent()) {
+                return;
+            }
+            inFlight.current = true;
+            setSwapPending(true);
             const statisticalParameters = {
                 tokenFrom: tokenIn.onChainFTMetadata.symbol,
                 tokenFromAddress: tokenIn.contractName,
@@ -89,55 +105,81 @@ export default function useSwap({
                     tokenIn,
                     amountIn,
                     tokenOut,
-                    amountOut: minAmountOut,
-                    nearUsdPrice: nearConfig.fiatValueMetadata.usd,
+                    amountOut: quote.minAmountOut,
+                    nearUsdPrice: nearConfig?.fiatValueMetadata?.usd,
                 }),
             };
 
             try {
-                const { swapTxHash, success, failReason, retry } =
-                    await fungibleTokenExchange.swap({
-                        account,
-                        amountIn,
-                        poolId,
-                        tokenIn,
-                        tokenOut,
-                        minAmountOut,
-                    });
-
-                if (retry) {
-                    setViewState(VIEW_STATE.preview);
-                    setSwapPending(false);
+                const result = await fungibleTokenExchange.swap({
+                    account,
+                    quote,
+                    tokenIn,
+                    tokenOut,
+                    amountIn,
+                    slippage,
+                    isCurrent,
+                });
+                if (result.reviewRequired) {
+                    if (!isCurrent()) {
+                        return;
+                    }
+                    if (result.quote) {
+                        setSelectedQuote(result.quote);
+                    }
+                    dispatch(
+                        showCustomAlert({
+                            success: false,
+                            messageCodeHeader: 'swap.review',
+                            errorMessage:
+                                'Price changed. Review the updated quote before confirming.',
+                        })
+                    );
+                    return;
+                }
+                if (result.retry) {
                     return;
                 }
 
-                Mixpanel.track(`Swap:${success ? 'done' : 'failed'}`, {
-                    failReason,
-                    ...statisticalParameters,
-                });
+                if (!result.unconfirmed) {
+                    Mixpanel.track(`Swap:${result.success ? 'done' : 'failed'}`, {
+                        failReason: result.failReason,
+                        ...statisticalParameters,
+                    });
+                }
 
+                const tokenIds = [
+                    tokenIn.contractName,
+                    tokenOut.contractName,
+                    ...(result.routeTokenIds || quote.routeTokenIds || []),
+                ].map((id) => fungibleTokenExchange.replaceNearIdIfNecessary(id));
                 dispatch(
                     updateTokensBalance({
                         accountId: account.accountId,
-                        tokenIds: [
-                            fungibleTokenExchange.replaceNearIdIfNecessary(
-                                tokenIn.contractName
-                            ),
-                            fungibleTokenExchange.replaceNearIdIfNecessary(
-                                tokenOut.contractName
-                            ),
-                        ],
+                        tokenIds: [...new Set(tokenIds)],
                     })
                 );
                 setCompletedSwapState({
-                    success,
-                    hash: swapTxHash,
-                    failReason,
+                    accountId: account.accountId,
+                    success: result.success,
+                    unconfirmed: result.unconfirmed,
+                    hash: result.swapTxHash,
+                    failReason: result.failReason,
+                    amountOut: result.amountOut,
+                    quote: result.quote || quote,
                     tokenIn: tokenIn.onChainFTMetadata.symbol,
                     tokenOut: tokenOut.onChainFTMetadata.symbol,
                 });
-                setViewState(VIEW_STATE.result);
+                if (
+                    mounted.current &&
+                    current.current.account?.accountId === account.accountId
+                ) {
+                    setViewState(VIEW_STATE.result);
+                }
             } catch (error) {
+                if (!isCurrent()) {
+                    return;
+                }
                 Mixpanel.track('Swap:failed', {
                     failReason: error.message,
                     ...statisticalParameters,
@@ -149,20 +191,22 @@ export default function useSwap({
                         errorMessage: error.message,
                     })
                 );
+            } finally {
+                inFlight.current = false;
+                if (mounted.current) {
+                    setSwapPending(false);
+                }
             }
-
-            setSwapPending(false);
         };
     }, [
         dispatch,
         account,
         amountIn,
-        poolId,
+        quote,
         tokenIn,
         tokenOut,
-        minAmountOut,
-        isNearTransformation,
+        slippage,
+        swapState,
+        nearConfig,
     ]);
-
-    return swap;
 }

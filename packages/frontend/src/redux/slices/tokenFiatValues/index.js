@@ -4,12 +4,11 @@ import mergeWith from 'lodash.mergewith';
 import omit from 'lodash.omit';
 import { createSelector } from 'reselect';
 
-import FiatValueManager from '../../../utils/fiatValueManager';
+import { fiatValueManager } from '../../../utils/fiatValueManager';
 import handleAsyncThunkStatus from '../../reducerStatus/handleAsyncThunkStatus';
 import initialStatusState from '../../reducerStatus/initialState/initialStatusState';
 
 const SLICE_NAME = 'tokenFiatValues';
-const fiatValueManager = new FiatValueManager();
 
 const fetchCoinGeckoFiatValues = createAsyncThunk(
     `${SLICE_NAME}/fetchCoinGeckoFiatValues`,

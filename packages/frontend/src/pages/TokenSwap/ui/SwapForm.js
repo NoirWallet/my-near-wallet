@@ -18,12 +18,14 @@ import { NEAR_DECIMALS } from '../../../utils/constants';
 import isMobile from '../../../utils/isMobile';
 import { useSwapData, VIEW_STATE } from '../model/Swap';
 import {
-    DEFAULT_OUTPUT_TOKEN_ID,
     PRICE_IMPACT_THRESHOLD,
     NOTIFICATION_TYPE,
 } from '../utils/constants';
 import useSwapInfo from '../utils/hooks/useSwapInfo';
+import useTokenPair from '../utils/hooks/useTokenPair';
+import { formatPriceImpact } from '../utils/formatPriceImpact';
 import LoadingDots from '../../../components/common/loader/LoadingDots';
+import RecoverableBalances from './RecoverableBalances';
 
 const mobile = isMobile();
 
@@ -63,12 +65,22 @@ const Header = styled.div`
         font-weight: 700;
         margin: auto;
     }
+
+    &[aria-disabled='true'] .back-arrow-button {
+        opacity: 0.5;
+        pointer-events: none;
+    }
 `;
 
 const SwapButtonWrapper = styled.div`
     margin: 0.8rem 0;
     display: flex;
     justify-content: center;
+
+    &[aria-disabled='true'] button {
+        opacity: 0.5;
+        pointer-events: none;
+    }
 `;
 
 const Footer = styled.div`
@@ -95,42 +107,27 @@ const tokenSelectState = {
 
 const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
     const availableBalance = useSelector(selectAvailableBalance);
-    const { tokensIn, listOfTokensIn, tokensOut, listOfTokensOut } = tokensConfig;
+    const { listOfTokensIn, listOfTokensOut } = tokensConfig;
     const [zeroAmountOut, setZeroAmountOut] = useState(false);
     const {
-        swapState: {
-            tokenIn,
-            tokenOut,
-            amountIn,
-            isNearTransformation,
-            amountOut,
-            swapPoolId,
-            estimatedFee,
-            priceImpactPercent,
-        },
-        events: { setViewState, setTokenIn, setTokenOut, setAmountIn, setAmountOut },
+        swapState: { tokenIn, tokenOut, amountIn, selectedQuote, slippage, swapPending },
+        events: { setViewState, setTokenIn, setTokenOut, setAmountIn },
     } = useSwapData();
+    const amountOut = selectedQuote?.amountOut || '';
+    const estimatedFee = selectedQuote?.estimatedFee || 0;
+    const priceImpactPercent = selectedQuote?.priceImpactPercent || '';
+    const displayedPriceImpact =
+        priceImpactPercent > PRICE_IMPACT_THRESHOLD.warning
+            ? formatPriceImpact(priceImpactPercent)
+            : '';
 
-    useEffect(() => {
-        if (!tokenIn && listOfTokensIn[0]) {
-            setTokenIn(listOfTokensIn[0]);
-        } else {
-            const newTokenIn =
-                tokensIn[tokenIn?.contractName] || tokensOut[tokenIn?.contractName];
+    useTokenPair(tokensConfig);
 
-            setTokenIn(newTokenIn);
+    const onClickReview = () => {
+        if (!swapPending) {
+            setViewState(VIEW_STATE.preview);
         }
-    }, [listOfTokensIn]);
-
-    useEffect(() => {
-        if (!tokenOut) {
-            setTokenOut(tokensOut[DEFAULT_OUTPUT_TOKEN_ID] || listOfTokensOut[1]);
-        } else {
-            setTokenOut(tokensOut[tokenOut?.contractName]);
-        }
-    }, [listOfTokensOut]);
-
-    const onClickReview = () => setViewState(VIEW_STATE.preview);
+    };
 
     const [displayTokenSelect, setDisplayTokenSelect] = useState(
         tokenSelectState.noSelect
@@ -145,11 +142,26 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
             : listOfTokensOut;
     }, [displayTokenSelect, listOfTokensIn, listOfTokensOut]);
 
-    const selectTokenIn = () => setDisplayTokenSelect(tokenSelectState.selectIn);
-    const selectTokenOut = () => setDisplayTokenSelect(tokenSelectState.selectOut);
-    const hideTokenSelection = () => setDisplayTokenSelect(tokenSelectState.noSelect);
+    const selectTokenIn = () => {
+        if (!swapPending) {
+            setDisplayTokenSelect(tokenSelectState.selectIn);
+        }
+    };
+    const selectTokenOut = () => {
+        if (!swapPending) {
+            setDisplayTokenSelect(tokenSelectState.selectOut);
+        }
+    };
+    const hideTokenSelection = () => {
+        if (!swapPending) {
+            setDisplayTokenSelect(tokenSelectState.noSelect);
+        }
+    };
 
     const handleTokenSelect = (token) => {
+        if (swapPending) {
+            return;
+        }
         switch (displayTokenSelect) {
             case tokenSelectState.selectIn:
                 if (token.contractName === tokenOut.contractName) {
@@ -169,8 +181,9 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
     };
 
     const handleInputAmountChange = (value) => {
-        setAmountIn(value);
-        setAmountOut('');
+        if (!swapPending) {
+            setAmountIn(value);
+        }
     };
 
     const { swapNotification, loading } = useSwapInfo({
@@ -178,6 +191,7 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
         tokenIn,
         amountIn,
         tokenOut,
+        slippage,
     });
 
     const [notification, setNotification] = useState(null);
@@ -216,6 +230,9 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
     }, [tokenIn, amountIn, availableBalance, estimatedFee, swapNotification]);
 
     const flipInputsData = () => {
+        if (swapPending) {
+            return;
+        }
         setTokenIn(tokenOut);
         setTokenOut(tokenIn);
 
@@ -228,11 +245,7 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
 
     const canSwap = useMemo(() => {
         const formIsFilled = Boolean(
-            tokenIn &&
-                tokenOut &&
-                (swapPoolId || isNearTransformation) &&
-                amountIn &&
-                amountOut
+            tokenIn && tokenOut && selectedQuote && amountIn && amountOut
         );
 
         let isZeroOutput = false;
@@ -260,10 +273,9 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
     }, [
         tokenIn,
         tokenOut,
-        swapPoolId,
+        selectedQuote,
         amountIn,
         amountOut,
-        isNearTransformation,
         isValidInput,
         estimatedFee,
         availableBalance,
@@ -281,8 +293,8 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
                 />
             ) : (
                 <>
-                    <Header>
-                        <BackArrowButton onClick={onGoBack} />
+                    <Header aria-disabled={swapPending}>
+                        <BackArrowButton onClick={swapPending ? undefined : onGoBack} />
                         <h4 className='title'>
                             <Translate id='swap.title' />
                         </h4>
@@ -300,16 +312,18 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
                         inputTestId='swapPageInputAmountField'
                         tokenSelectTestId='swapPageInputTokenSelector'
                         autoFocus
+                        disabled={swapPending}
+                        disableTokenSelect={swapPending}
                     />
-                    <SwapButtonWrapper>
-                        <FlipButton onClick={flipInputsData} />
+                    <SwapButtonWrapper aria-disabled={swapPending}>
+                        <FlipButton onClick={swapPending ? undefined : flipInputsData} />
                     </SwapButtonWrapper>
                     {tokensConfig.isLoadingAllTokens ? (
                         <LoadingDots />
                     ) : (
                         <Input
                             value={amountOut}
-                            onSelectToken={selectTokenOut}
+                            onSelectToken={swapPending ? undefined : selectTokenOut}
                             labelId='swap.to'
                             tokenSymbol={tokenOut?.onChainFTMetadata?.symbol}
                             tokenIcon={tokenOut?.onChainFTMetadata?.icon}
@@ -319,6 +333,7 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
                             inputTestId='swapPageOutputAmountField'
                             tokenSelectTestId='swapPageOutputTokenSelector'
                             disabled
+                            disableTokenSelect={swapPending}
                         />
                     )}
                     <Footer>
@@ -341,14 +356,11 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
 
                         {priceImpactPercent > PRICE_IMPACT_THRESHOLD.error ? (
                             <div className='p-3 mt-2 border-red-600 text-red-600 text-md bg-red-100 rounded-lg border-solid border-1'>
-                                The price impact is {priceImpactPercent}%. To protect you
-                                from potential asset loss, we have disabled the swap. We
-                                recommend using https://app.ref.finance.
+                                Price impact is {displayedPriceImpact}%. Swap unavailable.
                             </div>
                         ) : priceImpactPercent > PRICE_IMPACT_THRESHOLD.warning ? (
                             <div className='p-3 mt-2 border-yellow-800 text-yellow-800 text-md bg-yellow-100 rounded-lg border-solid border-1'>
-                                The price impact is {priceImpactPercent}%. For a better
-                                swap, please consider using https://app.ref.finance.
+                                Price impact is {displayedPriceImpact}%.
                             </div>
                         ) : (
                             <></>
@@ -357,6 +369,7 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
                         <FormButton
                             disabled={
                                 !canSwap ||
+                                swapPending ||
                                 priceImpactPercent > PRICE_IMPACT_THRESHOLD.error
                             }
                             onClick={onClickReview}
@@ -366,11 +379,16 @@ const SwapForm = memo(({ onGoBack, account, tokensConfig }) => {
                             <Translate id='swap.review' />
                         </FormButton>
                         <div className='cancel-button-wrapper'>
-                            <FormButton color='link gray' onClick={onGoBack}>
+                            <FormButton
+                                color='link gray'
+                                onClick={onGoBack}
+                                disabled={swapPending}
+                            >
                                 <Translate id='button.cancel' />
                             </FormButton>
                         </div>
                     </Footer>
+                    <RecoverableBalances account={account} />
                 </>
             )}
         </SwapFormWrapper>

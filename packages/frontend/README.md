@@ -21,6 +21,9 @@ as outlined above.
 The environment must be set at bundle time rather than run time. If you wish to run the frontend package with a different
 environment, please run `yarn pre-build` first.
 
+Swap remembers the last selected token pair in browser storage for each network.
+After a reload it resolves the selection from the current token list; unavailable
+tokens use available defaults. Amounts and quotes are not restored.
 
 Netlify
 ===

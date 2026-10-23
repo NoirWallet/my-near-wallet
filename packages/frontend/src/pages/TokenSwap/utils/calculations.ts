@@ -34,9 +34,21 @@ export function getSwapFeeAmount({
     swapFee,
 }: {
     amountIn: string;
-    swapFee: number;
+    swapFee?: number | string | null;
 }): number {
-    return amountIn && swapFee >= 0 ? Number(getPercentFrom(amountIn, swapFee)) : 0;
+    const fee = Number(swapFee);
+    if (
+        !amountIn ||
+        swapFee == null ||
+        swapFee === '' ||
+        !Number.isFinite(Number(amountIn)) ||
+        !Number.isFinite(fee) ||
+        fee < 0
+    ) {
+        return 0;
+    }
+
+    return Number(getPercentFrom(amountIn, fee));
 }
 
 async function hasStorageDeposit(

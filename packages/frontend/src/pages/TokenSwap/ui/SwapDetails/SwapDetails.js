@@ -8,22 +8,17 @@ import Accordion from '../../../../components/common/Accordion';
 import ChevronIcon from '../../../../components/svg/ChevronIcon';
 import { toSignificantDecimals } from '../../../../utils/amounts';
 import { useSwapData } from '../../model/Swap';
-import { getMinAmountOut, getSwapFeeAmount } from '../../utils/calculations';
+import { getSwapFeeAmount } from '../../utils/calculations';
 import { DECIMALS_TO_SAFE } from '../../utils/constants';
 
 export default function SwapDetails() {
     const {
-        swapState: {
-            tokenIn,
-            amountIn,
-            tokenOut,
-            amountOut,
-            slippage,
-            swapFee,
-            estimatedFee,
-            isNearTransformation,
-        },
+        swapState: { tokenIn, amountIn, tokenOut, selectedQuote },
     } = useSwapData();
+    const amountOut = selectedQuote?.amountOut || '';
+    const swapFee = selectedQuote?.swapFee;
+    const estimatedFee = selectedQuote?.estimatedFee;
+    const isNearTransformation = selectedQuote?.source === 'wrap';
 
     const [isActive, setIsActive] = useState(false);
 
@@ -33,11 +28,7 @@ export default function SwapDetails() {
         amountIn,
         swapFee,
     });
-    const minAmountOut = getMinAmountOut({
-        tokenOut,
-        amountOut,
-        slippage,
-    });
+    const minAmountOut = selectedQuote?.minAmountOut || '';
     const minAmountOutToShow = toSignificantDecimals(minAmountOut, DECIMALS_TO_SAFE);
 
     const isVisible = tokenIn && tokenOut && Number(amountIn);
@@ -67,7 +58,7 @@ export default function SwapDetails() {
             <Accordion trigger='swapDetailsTitle' className='breakdown'>
                 {isNearTransformation ? (
                     <NearTransformationDetails
-                        minAmountOut={amountIn}
+                        minAmountOut={minAmountOutToShow}
                         estimatedFee={estimatedFee}
                     />
                 ) : (

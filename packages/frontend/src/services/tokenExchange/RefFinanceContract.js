@@ -1,14 +1,11 @@
 import * as nearApi from 'near-api-js';
+import Big from 'big.js';
 
 import { ERROR_MESSAGES } from './constants';
-import {
-    findBestSwapPool,
-    formatTotalFeePercent,
-    getPriceImpactPercent,
-    getTopPoolIds,
-} from './utils';
+import { formatTotalFeePercent, getPriceImpactPercent, getTopPoolIds } from './utils';
 import CONFIG from '../../config';
 import { parseTokenAmount } from '../../utils/amounts';
+import { fromRaw, toRaw } from './quotes';
 
 const refConfig = {
     errorRegExp: /[A-Z][0-9]+: ?[a-zA-Z0-9_$\- ]+/,
@@ -31,7 +28,7 @@ const refConfig = {
 
 const DEV_CONTRACT_ID_REGEXP = /dev-[0-9]+-[0-9]+/;
 
-class RefFinanceContract {
+export class RefFinanceContract {
     async getData({ account }) {
         const { maxRequestAmount } = refConfig.pools;
         const contract = await this._newContract(account);
@@ -79,17 +76,55 @@ class RefFinanceContract {
     }
 
     async estimate({
+        account,
         poolsByIds,
         tokenInId,
         tokenInDecimals,
         amountIn,
         tokenOutId,
         tokenOutDecimals,
+        signal,
     }) {
-        if (!Object.keys(poolsByIds).keys) {
-            return {};
+        const candidates = Object.values(poolsByIds || {});
+        if (!candidates.length) {
+            throw new Error('No direct Ref pool available');
         }
-
+        const amountInRaw = toRaw(amountIn, tokenInDecimals);
+        const results = await Promise.allSettled(
+            candidates.map(async ({ poolId }) => {
+                const amountOutRaw = await account.viewFunction(
+                    refConfig.contractId,
+                    'get_return',
+                    {
+                        pool_id: poolId,
+                        token_in: tokenInId,
+                        token_out: tokenOutId,
+                        amount_in: amountInRaw,
+                    }
+                );
+                if (!/^\d+$/.test(amountOutRaw) || !Big(amountOutRaw).gt(0)) {
+                    throw new Error('Invalid Ref output');
+                }
+                return { poolId, amountOutRaw };
+            })
+        );
+        if (signal?.aborted) {
+            throw new Error('Quote request cancelled');
+        }
+        const best = results.reduce((selected, result) => {
+            if (result.status !== 'fulfilled') {
+                return selected;
+            }
+            return !selected || Big(result.value.amountOutRaw).gt(selected.amountOutRaw)
+                ? result.value
+                : selected;
+        }, null);
+        if (!best) {
+            throw new Error('No direct Ref quote available');
+        }
+        const pool = await account.viewFunction(refConfig.contractId, 'get_pool', {
+            pool_id: best.poolId,
+        });
         const commonParams = {
             tokenInId,
             tokenInDecimals,
@@ -98,16 +133,11 @@ class RefFinanceContract {
             tokenOutDecimals,
         };
 
-        const { pool, amountOut } = findBestSwapPool({
-            poolsByIds,
-            ...commonParams,
-        });
-        const { poolId, total_fee } = pool;
-
         return {
-            poolId,
-            amountOut,
-            swapFee: formatTotalFeePercent(total_fee),
+            poolId: best.poolId,
+            amountOutRaw: best.amountOutRaw,
+            amountOut: fromRaw(best.amountOutRaw, tokenOutDecimals),
+            swapFee: formatTotalFeePercent(pool.total_fee),
             priceImpactPercent: getPriceImpactPercent({ pool, ...commonParams }),
         };
     }
@@ -120,10 +150,13 @@ class RefFinanceContract {
         tokenOutId,
         tokenOutDecimals,
         minAmountOut,
+        amountInRaw,
+        minAmountOutRaw,
     }) {
         const actions = [];
-        const parsedAmountIn = parseTokenAmount(amountIn, tokenInDecimals);
-        const parsedMinAmountOut = parseTokenAmount(minAmountOut, tokenOutDecimals);
+        const parsedAmountIn = amountInRaw || parseTokenAmount(amountIn, tokenInDecimals);
+        const parsedMinAmountOut =
+            minAmountOutRaw || parseTokenAmount(minAmountOut, tokenOutDecimals);
 
         actions.push(
             nearApi.transactions.functionCall(

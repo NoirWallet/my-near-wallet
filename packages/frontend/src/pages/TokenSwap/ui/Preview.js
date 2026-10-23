@@ -8,8 +8,14 @@ import FormButton from '../../../components/common/FormButton';
 import { removeTrailingZeros } from '../../../utils/amounts';
 import { useSwapData } from '../model/Swap';
 import { PRICE_IMPACT_THRESHOLD } from '../utils/constants';
+import { formatPriceImpact } from '../utils/formatPriceImpact';
 
 const StyledContainer = styled.div`
+    &[aria-busy='true'] .back-arrow-button {
+        opacity: 0.5;
+        pointer-events: none;
+    }
+
     h4 {
         font-family: 'Inter';
         font-style: normal;
@@ -79,19 +85,24 @@ export default function Preview({
         : null;
 
     const handleSwap = () => {
-        if (typeof startSwap === 'function') {
+        if (!swappingToken && typeof startSwap === 'function') {
             startSwap();
         }
     };
 
     const {
-        swapState: { priceImpactPercent },
+        swapState: { selectedQuote },
     } = useSwapData();
+    const priceImpactPercent = selectedQuote?.priceImpactPercent || '';
+    const displayedPriceImpact =
+        priceImpactPercent > PRICE_IMPACT_THRESHOLD.warning
+            ? formatPriceImpact(priceImpactPercent)
+            : '';
 
     return (
-        <StyledContainer>
+        <StyledContainer aria-busy={swappingToken}>
             <div className='header'>
-                <BackArrowButton onClick={onClickGoBack} />
+                <BackArrowButton onClick={swappingToken ? undefined : onClickGoBack} />
                 <h4>
                     <Translate id='swap.reviewInfo' />
                 </h4>
@@ -130,14 +141,11 @@ export default function Preview({
                     className='p-3 mt-2 border-red-600 text-red-600 text-md bg-red-100 rounded-lg border-solid border-1'
                     data-test-id='swapPriceDisabledWarning'
                 >
-                    The price impact is {priceImpactPercent}%. To protect you from
-                    potential asset loss, we have disabled the swap. We recommend using
-                    https://app.ref.finance.
+                    Price impact is {displayedPriceImpact}%. Swap unavailable.
                 </div>
             ) : priceImpactPercent > PRICE_IMPACT_THRESHOLD.warning ? (
                 <div className='p-3 mt-2 border-yellow-800 text-yellow-800 text-md bg-yellow-100 rounded-lg border-solid border-1'>
-                    The price impact is {priceImpactPercent}%. For a better swap, please
-                    consider using https://app.ref.finance.
+                    Price impact is {displayedPriceImpact}%.
                 </div>
             ) : (
                 <></>
@@ -158,7 +166,11 @@ export default function Preview({
             </FormButton>
 
             <div className='flexCenterButton'>
-                <FormButton color='gray link' onClick={onClickGoBack}>
+                <FormButton
+                    color='gray link'
+                    onClick={onClickGoBack}
+                    disabled={swappingToken}
+                >
                     <Translate id='button.cancel' />
                 </FormButton>
             </div>

@@ -99,6 +99,11 @@ const TokenWrapper = styled.div`
     height: 64px;
     cursor: pointer;
 
+    &[aria-disabled='true'] {
+        cursor: default;
+        opacity: 0.5;
+    }
+
     > div {
         width: 100%;
         padding: 0px;
@@ -125,6 +130,7 @@ const Input = ({
     inputTestId,
     tokenSelectTestId,
     disabled,
+    disableTokenSelect = false,
     autoFocus,
 }) => {
     const handleChange = (event) => {
@@ -193,7 +199,8 @@ const Input = ({
             <Footer>
                 <TokenWrapper
                     className='token'
-                    onClick={onSelectToken}
+                    onClick={disableTokenSelect ? undefined : onSelectToken}
+                    aria-disabled={disableTokenSelect}
                     data-test-id={tokenSelectTestId}
                 >
                     <Token symbol={tokenSymbol} icon={tokenIcon} />
